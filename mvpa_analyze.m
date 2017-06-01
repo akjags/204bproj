@@ -1,18 +1,37 @@
-function xvalLoss = mvpa_analyze(vw, roiName)
+% mvpa_analyze.m
+%
+%    Usage: Runs cross-validation and classification analyses.
+%    Author: Akshay Jagadeesh
+%    Date: 05/26/2017
+%    
+%    Inputs:
+%       - vw --> view structure that you get from MrVista
+%               e.g. vw = MrVista();
+%       - roiName --> string containing roiName as it is saved in data/kgs101014_TaskEffects/3Danatomy/ROIs (without the .mat extension)
+%
+function crossvalLoss = mvpa_analyze(vw, roiName)
 
 if ieNotDefined('roiName')
+  % Defaults to VTC if no roiName is passed in
   roiName = 'VTC';
 end
+
 disp(sprintf('Computing cross-validated MVPA for ROI: %s', roiName));
+
+%Run on selective attention task (scans 4-6)
 scanNums = [4 5 6];
 scanGroup = 'MotionComp_RefScan1';
 
+% Compute mvpa using this ROI (just loads MVPA if it's already been run)
 mv = mv_init(vw, roiName, scanNums, scanGroup);
 
 tSeries = mv.tSeries; % numTimePoints x numVoxels
+
+%Get labels / conditions -- there are 22 unique ones (20 excluding cue and fixation)
 labels = mv.trials.label; %1 x numTimePoints --> cell of strings
 conds = mv.trials.cond; %1 x numTimePoints --> array of numeric value
 
+%% Generate 2 sets of labels based on which stim is attended / unattended
 attLabel = nan(length(conds), 1);
 unattLabel = nan(length(conds), 1);
 
@@ -26,7 +45,7 @@ end
 % 1:FaceU, 2:BodyU, 3:CarU, 4:HouseU, 5:WordU
 for i = 1:20
   switch i
-    case {5, 9, 13, 17}
+    case {5, 9, 13, 17} %
       unattLabel(conds==i) = 1;
     case {1, 10, 14, 18}
       unattLabel(conds==i) = 2;
@@ -39,41 +58,52 @@ for i = 1:20
   end
 end
 
+% Throw out the last 3 timepoints because (for some reason) 
+%    tSeries is 3 timepoints shorter than the conds/labels.
 attLabel = attLabel(1:end-3);
 unattLabel = unattLabel(1:end-3);
 
-anal2 = 1;
-if anal2
-  xvalLoss = part2Analysis(mv, tSeries, conds, attLabel, unattLabel);
-  return
-end
-
-
+%% Part 1: Compute 1-label classification.
 categories = {'Face', 'Body', 'Car', 'House', 'Word'};
-xvalLoss = nan(2,5);
+crossvalLoss = nan(2,5);
 for ci = 1:5
+  % Labels: 1 if attending this category, 0 otherwise
   al = attLabel==ci;
   svm = fitcsvm(mv.tSeries, al, 'Crossval', 'on');
   loss = kfoldLoss(svm);
-  xvalLoss(1,ci) = loss;
+  crossvalLoss(1,ci) = loss;
   disp(sprintf('%sA Misclassification: %02.02f%%', categories{ci}, 100*loss))
 
+  % Labels: 1 if unattending this category, 0 otherwise
   ul = unattLabel==ci;
   svm = fitcsvm(mv.tSeries, ul, 'Crossval', 'on');
   uLoss = kfoldLoss(svm);
-  xvalLoss(2,ci) = uLoss;
+  crossvalLoss(2,ci) = uLoss;
   disp(sprintf('%sU Misclassification: %02.02f%%', categories{ci}, 100*uLoss));
 end
 
-figure; bar(xvalLoss');
+figure; bar(crossvalLoss');
 title(sprintf('%s: Within-Condition Crossvalidated Misclassification Rate', roiName));
 set(gca, 'XTickLabel', categories);
 ylabel('Error');
 legend('Attended', 'Unattended');
-drawPublishAxis;
+%drawPublishAxis;
+
+%% Part 2: Compute cross category analysis
+crossvalLoss = part2Analysis(mv, tSeries, conds, attLabel, unattLabel);
 
 
-function acc = part2Analysis(mv, tSeries, conds, attLabel, unattLabel)
+% crossCategoryAnalysis
+%       
+%     For each pair of stimuli(e.g. Face,House), trains a 2-way classifier on all attended
+%     conditions for those stimuli (e.g. FaceA-CarU, FaceA-BodyU, HouseA-CarU, etc).
+%     Then, tests on the shared stimuli (FaceA-HouseU and HouseA-FaceU) to see if it classifies those
+%     into the correct attended label.
+%
+%     Inputs:
+%        - mv --> mvpa struct returned from calling 
+%
+function acc = crossCategoryAnalysis(mv, tSeries, conds, attLabel, unattLabel)
 
 % start with FB/BF
 exc = nchoosek(1:5,2);
@@ -115,5 +145,5 @@ plot([0 11], [0.5 0.5], ':k');
 set(gca, 'XTickLabel', combos);
 title(sprintf('%s: Two-class Classification Accuracy', mv.roi.name));
 ylabel('Classification Accuracy');
-drawPublishAxis;
+%drawPublishAxis;
 
