@@ -9,11 +9,14 @@
 %               e.g. vw = MrVista();
 %       - roiName --> string containing roiName as it is saved in data/kgs101014_TaskEffects/3Danatomy/ROIs (without the .mat extension)
 %
-function crossvalLoss = mvpa_analyze(vw, roiName)
+function cvl= mvpa_analyze(vw, roiName, onlyPart2)
 
 if ieNotDefined('roiName')
   % Defaults to VTC if no roiName is passed in
   roiName = 'VTC';
+end
+if ieNotDefined('onlyPart2')
+  onlyPart2 = 0;
 end
 
 disp(sprintf('Computing cross-validated MVPA for ROI: %s', roiName));
@@ -63,35 +66,49 @@ end
 attLabel = attLabel(1:end-3);
 unattLabel = unattLabel(1:end-3);
 
+if onlyPart2
+  accuracy = crossCategoryAnalysis(mv, tSeries, conds, attLabel, unattLabel);
+  cvl = accuracy;
+  return
+end
+
 %% Part 1: Compute 1-label classification.
 categories = {'Face', 'Body', 'Car', 'House', 'Word'};
 crossvalLoss = nan(2,5);
+stdError = nan(2,5);
 for ci = 1:5
   % Labels: 1 if attending this category, 0 otherwise
   al = attLabel==ci;
   svm = fitcsvm(mv.tSeries, al, 'Crossval', 'on');
-  loss = kfoldLoss(svm);
-  crossvalLoss(1,ci) = loss;
-  disp(sprintf('%sA Misclassification: %02.02f%%', categories{ci}, 100*loss))
+  loss = kfoldLoss(svm, 'mode', 'individual');
+  crossvalLoss(1,ci) = mean(loss);
+  stdError(1,ci) = 1.96*std(loss)/sqrt(length(loss));
+  disp(sprintf('%sA Misclassification: %02.02f%%', categories{ci}, 100*mean(loss)))
 
   % Labels: 1 if unattending this category, 0 otherwise
   ul = unattLabel==ci;
   svm = fitcsvm(mv.tSeries, ul, 'Crossval', 'on');
-  uLoss = kfoldLoss(svm);
-  crossvalLoss(2,ci) = uLoss;
-  disp(sprintf('%sU Misclassification: %02.02f%%', categories{ci}, 100*uLoss));
+  uLoss = kfoldLoss(svm, 'mode', 'individual');
+  crossvalLoss(2,ci) = mean(uLoss);
+  stdError(2,ci) = 1.96*std(uLoss)/sqrt(length(uLoss));
+  disp(sprintf('%sU Misclassification: %02.02f%%', categories{ci}, 100*mean(uLoss)));
 end
 
 figure; bar(crossvalLoss');
+hold on; errorbar((1:5) - .125, crossvalLoss(1,:), stdError(1,:), '.k', 'LineWidth', 1);
+errorbar((1:5)+.125, crossvalLoss(2,:), stdError(1,:), '.k', 'LineWidth', 1);
 title(sprintf('%s: Within-Condition Crossvalidated Misclassification Rate', roiName));
 set(gca, 'XTickLabel', categories);
 ylabel('Error');
+ylim([0 0.4]);
 legend('Attended', 'Unattended');
 %drawPublishAxis;
 
 %% Part 2: Compute cross category analysis
-crossvalLoss = part2Analysis(mv, tSeries, conds, attLabel, unattLabel);
+accuracy = crossCategoryAnalysis(mv, tSeries, conds, attLabel, unattLabel);
 
+cvl.part1 = crossvalLoss;
+cvl.part2 = accuracy;
 
 % crossCategoryAnalysis
 %       
@@ -141,9 +158,10 @@ for ei = 1:size(exc,1)
 end
 
 figure; bar(acc); hold on;
-plot([0 11], [0.5 0.5], ':k');
+plot([0 11], [0.5 0.5], '-r');
 set(gca, 'XTickLabel', combos);
-title(sprintf('%s: Two-class Classification Accuracy', mv.roi.name));
+title(sprintf('%s: Two-Category Classification Accuracy', mv.roi.name));
 ylabel('Classification Accuracy');
+ylim([0 .8]);
 %drawPublishAxis;
 
